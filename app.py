@@ -4,8 +4,6 @@ import numpy as np
 import cv2
 
 # Import our custom modules
-from modules.dark_ir import enhance_low_light
-from modules.derain import remove_rain
 from modules.classifier import classify_condition
 from modules.restoration import route_and_restore
 from modules.detector import detect_license_plates
@@ -40,8 +38,9 @@ if uploaded_file is not None:
         st.image(original_image, use_column_width=True)
         
     with st.spinner("Running 5-Stage ALPR Pipeline..."):
-        # Stage 1: Condition Classifier
-        condition = classify_condition(img_np)
+        # Stage 1: Condition Classifier --------TEMPORARY PLACEHOLDER--------
+        condition = 'test'  # Placeholder for testing
+        # condition = classify_condition(img_np)  # Uncomment when classifier is implemented
         st.success(f"**Stage 1 - Classifier**: Detected Environment Condition => `{condition}`")
         
         # Stage 2: Adaptive Restoration

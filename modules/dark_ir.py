@@ -2,10 +2,9 @@ import cv2
 import numpy as np
 from PIL import Image
 
-def enhance_low_light(image, gamma=0.6, clip_limit=2.0, tile_grid_size=(8, 8)):
+def managing_contrast_and_brightness_mathematically(image, gamma=0.5, clip_limit=3.0, tile_grid_size=(8, 8)):
     """
-    Enhances a low-light (Dark IR) image using a combination of Gamma Correction
-    and Contrast Limited Adaptive Histogram Equalization (CLAHE).
+    Enhances a low-light image with a grayscale OCR-focused preprocessing chain.
     
     Args:
         image (PIL.Image or numpy.ndarray): Input image.
@@ -21,39 +20,45 @@ def enhance_low_light(image, gamma=0.6, clip_limit=2.0, tile_grid_size=(8, 8)):
         img_np = np.array(image)
     else:
         img_np = image.copy()
-        
-    # Ensure image is in RGB format for processing (OpenCV uses BGR by default, but
-    # assuming Streamlit/PIL provides RGB, we'll work with standard channels).
+
+    # Ensure single-channel grayscale processing regardless of input format.
     if len(img_np.shape) == 2:
-        # Grayscale image
-        is_color = False
+        gray = img_np
+    elif len(img_np.shape) == 3 and img_np.shape[2] == 1:
+        gray = img_np[:, :, 0]
     else:
-        is_color = True
-        # Convert RGB to LAB color space to apply CLAHE only to the Lightness channel
-        lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
-        l_channel, a, b = cv2.split(lab)
-        
-    # --- Step 1: Gamma Correction ---
-    # Build a lookup table mapping the pixel values [0, 255] to their adjusted gamma values
+        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+
+    # 1. Gamma Correction
     inv_gamma = 1.0 / gamma
     table = np.array([((i / 255.0) ** inv_gamma) * 255
                       for i in np.arange(0, 256)]).astype("uint8")
-    
-    if is_color:
-        l_channel = cv2.LUT(l_channel, table)
-    else:
-        img_np = cv2.LUT(img_np, table)
+    gamma_corrected = cv2.LUT(gray, table)
 
-    # --- Step 2: CLAHE (Contrast Limited Adaptive Histogram Equalization) ---
+    # 2. CLAHE
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
-    
-    if is_color:
-        cl = clahe.apply(l_channel)
-        # Merge the CLAHE enhanced L-channel back with A and B channels
-        limg = cv2.merge((cl, a, b))
-        # Convert back to RGB
-        enhanced_img = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
-    else:
-        enhanced_img = clahe.apply(img_np)
-        
-    return Image.fromarray(enhanced_img)
+    contrast_enhanced = clahe.apply(gamma_corrected)
+
+    # 3. Bilateral filter
+    denoised = cv2.bilateralFilter(contrast_enhanced, 11, 75, 75)
+
+    # 4. Black-hat morphology for dark text/glare separation
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 5))
+    blackhat = cv2.morphologyEx(denoised, cv2.MORPH_BLACKHAT, kernel)
+
+    # 5. Adaptive threshold for OCR-ready character emphasis
+    thresh = cv2.adaptiveThreshold(
+        denoised,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        11,
+        2,
+    )
+
+    # Final cleanup: combine black-hat and threshold responses
+    final_output = cv2.add(blackhat, thresh)
+
+    # Keep downstream compatibility: detector/UI expect 3-channel images.
+    final_output_rgb = cv2.cvtColor(final_output, cv2.COLOR_GRAY2RGB)
+    return Image.fromarray(final_output_rgb)

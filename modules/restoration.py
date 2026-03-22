@@ -1,4 +1,4 @@
-from modules.dark_ir import enhance_low_light
+from modules.dark_ir import managing_contrast_and_brightness_mathematically
 from modules.derain import remove_rain
 # Placeholder for dehaze module, importing here to show architecture 
 # from modules.dehaze import remove_haze
@@ -7,6 +7,11 @@ def route_and_restore(image, condition):
     """
     Routes the image to the appropriate restoration module based on the classified condition.
     """
+    restored = managing_contrast_and_brightness_mathematically(image, gamma=1.5, clip_limit=3.0)
+    return restored, "Applied Low-Light Enhancement"
+
+    '''
+    
     if condition == 'Night':
         # Apply Zero-DCE or our OpenCV Dark IR equivalent
         # Gamma > 1.0 brightens the image in standard 1/gamma correction
@@ -31,3 +36,4 @@ def route_and_restore(image, condition):
         return restored, "Applied Derain Filter"
         
     return image, "No restoration needed"
+    '''
