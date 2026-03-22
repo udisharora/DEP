@@ -11,10 +11,8 @@ except Exception as e:
     print(f"Failed to load EasyOCR: {e}")
     reader = None
 
-def align_and_binarize_plate(plate_image):
+def resize_and_clahe(plate_image):
     """
-    Simulates aligning a skewed plate using perspective warp.
-    Instead of hard binarization (which hurts deep-learning OCR like EasyOCR),
     we use CLAHE to improve contrast.
     """
     if isinstance(plate_image, Image.Image):

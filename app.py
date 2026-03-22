@@ -9,7 +9,7 @@ from modules.derain import remove_rain
 from modules.classifier import classify_condition
 from modules.restoration import route_and_restore
 from modules.detector import detect_license_plates
-from modules.ocr_engine import align_and_binarize_plate, extract_text
+from modules.ocr_engine import resize_and_clahe, extract_text
 
 st.set_page_config(page_title="Advanced ALPR Pipeline", layout="wide")
 
@@ -79,7 +79,7 @@ if uploaded_file is not None:
             plate_crop = np.array(restored_image)[py1:py2, px1:px2]
             
             # Stage 5: Binarization & OCR
-            enhanced_plate = align_and_binarize_plate(plate_crop)
+            enhanced_plate = resize_and_clahe(plate_crop)
             text, conf = extract_text(enhanced_plate) 
             
             with col4:
