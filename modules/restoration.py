@@ -1,33 +1,33 @@
 from modules.dark_ir import enhance_low_light
 from modules.derain import remove_rain
+from modules.nafnet import process_with_nafnet
 # Placeholder for dehaze module, importing here to show architecture 
 # from modules.dehaze import remove_haze
 
 def route_and_restore(image, condition):
     """
-    Routes the image to the appropriate restoration module based on the classified condition.
+    Deblurs the image first with NAFNet, then applies condition-aware restoration.
     """
+    try:
+        deblurred_image = process_with_nafnet(image)
+        deblur_msg = "Applied NAFNet deblurring"
+    except Exception as exc:
+        deblurred_image = image
+        deblur_msg = f"Skipped NAFNet deblurring: {exc}"
+
     if condition == 'Night':
-        # Apply Zero-DCE or our OpenCV Dark IR equivalent
-        # Gamma > 1.0 brightens the image in standard 1/gamma correction
-        restored = enhance_low_light(image, gamma=1.5, clip_limit=3.0)
-        return restored, "Applied Low-Light Enhancement"
+        restored = enhance_low_light(deblurred_image, gamma=1.5, clip_limit=3.0)
+        return deblurred_image, restored, f"{deblur_msg}; applied low-light enhancement"
         
     elif condition == 'Glare':
-        # For Glare, DO NOT darken everything globally (which hides the dark car).
-        # Use neutral gamma (=1.0) and let CLAHE equalize the local contrast.
-        restored = enhance_low_light(image, gamma=1.0, clip_limit=4.0)
-        return restored, "Applied Glare Reduction (CLAHE)"
+        restored = enhance_low_light(deblurred_image, gamma=1.0, clip_limit=4.0)
+        return deblurred_image, restored, f"{deblur_msg}; applied glare reduction"
         
     elif condition == 'Haze':
-        # Apply AOD-Net or Dark Channel Prior
-        # Placeholder till dehaze module is built
-        return image, "Haze detected (Dehaze module pending)"
+        return deblurred_image, deblurred_image, f"{deblur_msg}; dehaze module pending"
         
     elif condition == 'Rain' or condition == 'Clear (or Rain)':
-        # Apply MPRNet or our OpenCV Derain equivalent
-        # For our heuristic, we'll apply a light derain pass just in case
-        restored = remove_rain(image, kernel_size=(5, 5), threshold=60)
-        return restored, "Applied Derain Filter"
+        restored = remove_rain(deblurred_image, kernel_size=(5, 5), threshold=60)
+        return deblurred_image, restored, f"{deblur_msg}; applied derain filtering"
         
-    return image, "No restoration needed"
+    return deblurred_image, deblurred_image, deblur_msg

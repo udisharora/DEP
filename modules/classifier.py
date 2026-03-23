@@ -1,5 +1,3 @@
-import streamlit as st
-from PIL import Image
 import numpy as np
 
 # We'll use a simple heuristic-based classifier for V1 (brightness/contrast variance)

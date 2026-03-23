@@ -1,11 +1,7 @@
 import streamlit as st
 from PIL import Image, ImageDraw
 import numpy as np
-import cv2
 
-# Import our custom modules
-from modules.dark_ir import enhance_low_light
-from modules.derain import remove_rain
 from modules.classifier import classify_condition
 from modules.restoration import route_and_restore
 from modules.detector import detect_license_plates
@@ -34,7 +30,7 @@ if uploaded_file is not None:
     original_image = Image.open(uploaded_file).convert('RGB')
     img_np = np.array(original_image)
     
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.subheader("1. Original Image")
         st.image(original_image, use_column_width=True)
@@ -45,11 +41,15 @@ if uploaded_file is not None:
         st.success(f"**Stage 1 - Classifier**: Detected Environment Condition => `{condition}`")
         
         # Stage 2: Adaptive Restoration
-        restored_image, restoration_msg = route_and_restore(original_image, condition)
+        deblurred_image, restored_image, restoration_msg = route_and_restore(original_image, condition)
         st.info(f"**Stage 2 - Restoration**: {restoration_msg}")
         
         with col2:
-            st.subheader("2. Restored Image")
+            st.subheader("2. NAFNet Deblur Output")
+            st.image(deblurred_image, use_column_width=True)
+
+        with col3:
+            st.subheader("3. Restored Image")
             st.image(restored_image, use_column_width=True)
             
         # Stage 3: Deep License Plate Detection (YOLOv8)
