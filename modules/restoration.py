@@ -1,33 +1,25 @@
-from modules.dark_ir import enhance_low_light
-from modules.derain import remove_rain
-# Placeholder for dehaze module, importing here to show architecture 
-# from modules.dehaze import remove_haze
+from modules.dark_ir import process_with_darkir
+from modules.nafnet import process_with_nafnet
 
-def route_and_restore(image, condition):
+def prepare_image_for_detection(image, condition):
     """
-    Routes the image to the appropriate restoration module based on the classified condition.
+    Always deblur the image first for detection, then prepare a DarkIR fallback
+    image only if a second detection pass is needed.
     """
-    if condition == 'Night':
-        # Apply Zero-DCE or our OpenCV Dark IR equivalent
-        # Gamma > 1.0 brightens the image in standard 1/gamma correction
-        restored = enhance_low_light(image, gamma=1.5, clip_limit=3.0)
-        return restored, "Applied Low-Light Enhancement"
-        
-    elif condition == 'Glare':
-        # For Glare, DO NOT darken everything globally (which hides the dark car).
-        # Use neutral gamma (=1.0) and let CLAHE equalize the local contrast.
-        restored = enhance_low_light(image, gamma=1.0, clip_limit=4.0)
-        return restored, "Applied Glare Reduction (CLAHE)"
-        
-    elif condition == 'Haze':
-        # Apply AOD-Net or Dark Channel Prior
-        # Placeholder till dehaze module is built
-        return image, "Haze detected (Dehaze module pending)"
-        
-    elif condition == 'Rain' or condition == 'Clear (or Rain)':
-        # Apply MPRNet or our OpenCV Derain equivalent
-        # For our heuristic, we'll apply a light derain pass just in case
-        restored = remove_rain(image, kernel_size=(5, 5), threshold=60)
-        return restored, "Applied Derain Filter"
-        
-    return image, "No restoration needed"
+    messages = []
+
+    try:
+        deblurred_image = process_with_nafnet(image)
+        messages.append("Applied NAFNet deblurring before the first detection pass")
+    except Exception as exc:
+        deblurred_image = image
+        messages.append(f"Skipped initial NAFNet deblurring: {exc}")
+
+    try:
+        darkir_image = process_with_darkir(deblurred_image)
+        messages.append("Prepared DarkIR fallback image for the second detection pass")
+    except Exception as exc:
+        darkir_image = deblurred_image
+        messages.append(f"Skipped DarkIR fallback: {exc}")
+
+    return darkir_image, deblurred_image, "; ".join(messages)

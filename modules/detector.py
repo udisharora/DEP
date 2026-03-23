@@ -23,6 +23,12 @@ def detect_license_plates(image, conf_threshold=0.25):
         img_np = np.array(image)
     else:
         img_np = image.copy()
+
+    # YOLO expects 3-channel input. Promote grayscale safely when needed.
+    if len(img_np.shape) == 2:
+        img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
+    elif len(img_np.shape) == 3 and img_np.shape[2] == 1:
+        img_np = cv2.cvtColor(img_np[:, :, 0], cv2.COLOR_GRAY2RGB)
         
     # The V2 model specifically points to the plate, bypassing generic vehicles
     results = plate_model(img_np, conf=conf_threshold)

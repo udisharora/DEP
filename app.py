@@ -1,28 +1,25 @@
 import streamlit as st
 from PIL import Image, ImageDraw
 import numpy as np
-import cv2
 
-# Import our custom modules
-from modules.dark_ir import enhance_low_light
-from modules.derain import remove_rain
 from modules.classifier import classify_condition
-from modules.restoration import route_and_restore
+from modules.restoration import prepare_image_for_detection
 from modules.detector import detect_license_plates
-from modules.ocr_engine import align_and_binarize_plate, extract_text
+from modules.ocr_engine import resize_and_clahe, extract_text
+from modules.nafnet import process_with_nafnet
 
 st.set_page_config(page_title="Advanced ALPR Pipeline", layout="wide")
 
 st.title("Auto-Adaptive License Plate Recognition")
-st.write("An end-to-end ALPR pipeline that detects adverse weather/night conditions, adaptively restores the image, detects vehicles, crops license plates, and extracts alphanumeric text.")
+st.write("A detection-first ALPR pipeline that always deblurs once before detection, uses DarkIR only as a fallback detection pass, and finally deblurs the cropped plate before OCR.")
 
 st.sidebar.header("Pipeline Architecture")
 st.sidebar.markdown("""
-1. **Classifier**: Night/Rain/Haze
-2. **Restoration**: Adaptive Routing
-3. **Detector**: YOLOv8 (Vehicle -> Plate)
-4. **Alignment**: Binarize & Warp
-5. **OCR Engine**: EasyOCR
+1. **Condition Classifier**: Scene label for inspection
+2. **Prep 1**: Always deblur with NAFNet
+3. **Detection Pass 1**: Try YOLOv8 on the deblurred image
+4. **Fallback Prep 2**: Apply DarkIR on the deblurred image
+5. **Plate OCR**: Crop plate -> deblur crop -> OCR preprocessing -> EasyOCR
 """)
 st.sidebar.info("Upload an image in the main panel to run the full 5-stage pipeline.")
 
@@ -34,7 +31,7 @@ if uploaded_file is not None:
     original_image = Image.open(uploaded_file).convert('RGB')
     img_np = np.array(original_image)
     
-    col1, col2 = st.columns(2)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.subheader("1. Original Image")
         st.image(original_image, use_column_width=True)
@@ -43,27 +40,41 @@ if uploaded_file is not None:
         # Stage 1: Condition Classifier
         condition = classify_condition(img_np)
         st.success(f"**Stage 1 - Classifier**: Detected Environment Condition => `{condition}`")
-        
-        # Stage 2: Adaptive Restoration
-        restored_image, restoration_msg = route_and_restore(original_image, condition)
-        st.info(f"**Stage 2 - Restoration**: {restoration_msg}")
-        
+
+        # Stage 2: Always deblur before detection, then prepare DarkIR fallback.
+        darkir_image, fallback_image, restoration_msg = prepare_image_for_detection(original_image, condition)
+        detection_image = fallback_image
+        boxes = detect_license_plates(detection_image)
+        used_initial_detection = len(boxes) > 0
+
+        if not used_initial_detection:
+            detection_image = darkir_image
+            boxes = detect_license_plates(detection_image)
+
+        st.info(f"**Stage 2 - Detection Preparation**: {restoration_msg}")
+
         with col2:
-            st.subheader("2. Restored Image")
-            st.image(restored_image, use_column_width=True)
+            st.subheader("2. NAFNet Deblur Output")
+            st.image(fallback_image, use_column_width=True)
+
+        with col3:
+            st.subheader("3. DarkIR Fallback Output")
+            st.image(darkir_image, use_column_width=True)
+
+        with col4:
+            st.subheader("4. Detection Image Used")
+            st.image(detection_image, use_column_width=True)
             
-        # Stage 3: Deep License Plate Detection (YOLOv8)
+        # Stage 3: License Plate Detection (YOLOv8)
         st.write("---")
-        st.subheader("Stage 3: Deep License Plate Detection")
-        
-        boxes = detect_license_plates(restored_image)
-        
+        st.subheader("Stage 3: License Plate Detection")
+
         col3, col4 = st.columns(2)
         if len(boxes) == 0:
-            st.warning("No license plates detected by fine-tuned YOLOv8.")
+            st.warning("No license plates detected on either the deblurred image or the DarkIR fallback image.")
         else:
             # Draw boxes on image
-            annotated_img = restored_image.copy()
+            annotated_img = detection_image.copy()
             draw = ImageDraw.Draw(annotated_img)
             
             # Process the most confident plate box
@@ -72,22 +83,40 @@ if uploaded_file is not None:
             draw.rectangle([px1, py1, px2, py2], outline="red", width=3)
             
             with col3:
-                st.write(f"Detected **License Plate** (Confidence: {best_box['score']:.2f})")
+                if used_initial_detection:
+                    detection_source = "deblurred image"
+                else:
+                    detection_source = "DarkIR fallback image"
+                st.write(f"Detected **License Plate** on the {detection_source} (Confidence: {best_box['score']:.2f})")
                 st.image(annotated_img, use_column_width=True)
                 
             # Stage 4: Plate ROI Extraction
-            plate_crop = np.array(restored_image)[py1:py2, px1:px2]
+            plate_crop = np.array(detection_image)[py1:py2, px1:px2]
+
+            try:
+                deblurred_plate = process_with_nafnet(plate_crop)
+                plate_for_ocr = np.array(deblurred_plate)
+                plate_deblur_msg = "Applied NAFNet deblurring to the cropped plate before OCR"
+            except Exception as exc:
+                deblurred_plate = Image.fromarray(plate_crop)
+                plate_for_ocr = plate_crop
+                plate_deblur_msg = f"Skipped plate deblurring before OCR: {exc}"
             
-            # Stage 5: Binarization & OCR
-            enhanced_plate = align_and_binarize_plate(plate_crop)
+            # Stage 5: OCR preprocessing and text extraction
+            enhanced_plate = resize_and_clahe(plate_for_ocr)
             text, conf = extract_text(enhanced_plate) 
             
             with col4:
                 st.write("**License Plate ROI Extraction**")
                 st.image(plate_crop, channels="RGB", use_column_width=False, width=300)
+
+                st.write("**Deblurred Plate for OCR**")
+                st.image(deblurred_plate, use_column_width=False, width=300)
                 
-                st.write("**Enhanced for OCR (CLAHE)**")
+                st.write("**Prepared for OCR**")
                 st.image(enhanced_plate, channels="GRAY", use_column_width=False, width=300)
+
+                st.caption(plate_deblur_msg)
                 
                 st.success(f"**Final Extracted Text:** `{text}` (Conf: {conf:.2f})")
 

@@ -3,6 +3,8 @@ import numpy as np
 from PIL import Image
 import easyocr
 
+from modules.dark_ir import managing_contrast_and_brightness_mathematically
+
 # Initialize EasyOCR reader (Downloads model weights on first run)
 # 'en' indicates English alphanumeric reading.
 try:
@@ -11,36 +13,25 @@ except Exception as e:
     print(f"Failed to load EasyOCR: {e}")
     reader = None
 
-def align_and_binarize_plate(plate_image):
+def resize_and_clahe(plate_image):
     """
-    Simulates aligning a skewed plate using perspective warp.
-    Instead of hard binarization (which hurts deep-learning OCR like EasyOCR),
-    we use CLAHE to improve contrast.
+    Apply the mathematical preprocessing pipeline to the cropped plate before OCR.
     """
-    if isinstance(plate_image, Image.Image):
-        img_np = np.array(plate_image)
+    processed_plate = managing_contrast_and_brightness_mathematically(
+        plate_image,
+        gamma=1.5,
+        clip_limit=3.0,
+    )
+
+    if isinstance(processed_plate, Image.Image):
+        processed_np = np.array(processed_plate)
     else:
-        img_np = plate_image.copy()
-        
-    # Resize small plate crops to help EasyOCR 
-    # Plates smaller than ~150px wide often fail OCR. Upscale by 2x using Lanczos.
-    h, w = img_np.shape[:2]
-    if w < 200:
-        new_w = w * 2
-        new_h = h * 2
-        img_np = cv2.resize(img_np, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
-        
-    # Convert to Grayscale
-    if len(img_np.shape) == 3:
-        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-    else:
-        gray = img_np
-        
-    # Apply CLAHE to improve contrast instead of harsh thresholding
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    enhanced = clahe.apply(gray)
-    
-    return enhanced
+        processed_np = processed_plate.copy()
+
+    if len(processed_np.shape) == 3:
+        processed_np = cv2.cvtColor(processed_np, cv2.COLOR_RGB2GRAY)
+
+    return processed_np
 
 def extract_text(plate_image):
     """
