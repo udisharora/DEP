@@ -84,6 +84,33 @@ def process_with_darkir(image):
     return Image.fromarray(restored_img)
 
 
+def reduce_glare_with_gamma_and_clahe(image, gamma=1.0, clip_limit=6.0, tile_grid_size=(8, 8)):
+    """
+    Apply a post-restoration glare-reduction pass using gamma correction and CLAHE.
+    """
+    if isinstance(image, Image.Image):
+        img_np = np.array(image.convert("RGB"))
+    else:
+        img_np = np.array(image).copy()
+
+    lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
+    l_channel, a_channel, b_channel = cv2.split(lab)
+
+    inv_gamma = 1.0 / gamma
+    table = np.array(
+        [((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)],
+        dtype=np.uint8,
+    )
+    adjusted_l = cv2.LUT(l_channel, table)
+
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+    glare_reduced_l = clahe.apply(adjusted_l)
+
+    merged = cv2.merge((glare_reduced_l, a_channel, b_channel))
+    glare_reduced_rgb = cv2.cvtColor(merged, cv2.COLOR_LAB2RGB)
+    return Image.fromarray(glare_reduced_rgb)
+
+
 def managing_contrast_and_brightness_mathematically(image, gamma=0.5, clip_limit=3.0, tile_grid_size=(8, 8)):
     """
     Enhances a low-light image with a grayscale OCR-focused preprocessing chain.

@@ -1,4 +1,4 @@
-from modules.dark_ir import process_with_darkir
+from modules.dark_ir import process_with_darkir, reduce_glare_with_gamma_and_clahe
 from modules.nafnet import process_with_nafnet
 
 def prepare_image_for_detection(image, condition):
@@ -16,8 +16,13 @@ def prepare_image_for_detection(image, condition):
         messages.append(f"Skipped initial NAFNet deblurring: {exc}")
 
     try:
-        darkir_image = process_with_darkir(deblurred_image)
-        messages.append("Prepared DarkIR fallback image for the second detection pass")
+        darkir_restored = process_with_darkir(deblurred_image)
+        darkir_image = reduce_glare_with_gamma_and_clahe(
+            darkir_restored,
+            gamma=4.0,
+            clip_limit=100.0,
+        )
+        messages.append("Prepared DarkIR fallback image and applied gamma correction plus CLAHE for glare reduction")
     except Exception as exc:
         darkir_image = deblurred_image
         messages.append(f"Skipped DarkIR fallback: {exc}")

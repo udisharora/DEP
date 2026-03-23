@@ -4,4 +4,4 @@ __pycache__/
 *.pt
 streamlit.log
 .vscode/
-NAFNet-*.pt
+NAFNet/
