@@ -1,40 +1,47 @@
 from modules.dark_ir import process_with_darkir, managing_contrast_and_brightness_mathematically
 from modules.derain import remove_rain
-# Placeholder for dehaze module, importing here to show architecture 
-# from modules.dehaze import remove_haze
+from modules.nafnet import process_with_nafnet
 
 def route_and_restore(image, condition):
     """
-    Routes the image to the appropriate restoration module based on the classified condition.
+    Deblurs the image with NAFNet first, then applies DarkIR and a final OCR-focused
+    post-processing step. If NAFNet is unavailable, the pipeline falls back to the
+    original image.
     """
-    darkir_restored = process_with_darkir(image)
-    restored = managing_contrast_and_brightness_mathematically(darkir_restored, gamma=1.5, clip_limit=3.0)
-    return darkir_restored, restored, "Applied DarkIR restoration followed by contrast and brightness enhancement"
+    messages = []
 
-    '''
-    
-    if condition == 'Night':
-        # Apply Zero-DCE or our OpenCV Dark IR equivalent
-        # Gamma > 1.0 brightens the image in standard 1/gamma correction
-        restored = enhance_low_light(image, gamma=1.5, clip_limit=3.0)
-        return restored, "Applied Low-Light Enhancement"
-        
-    elif condition == 'Glare':
-        # For Glare, DO NOT darken everything globally (which hides the dark car).
-        # Use neutral gamma (=1.0) and let CLAHE equalize the local contrast.
-        restored = enhance_low_light(image, gamma=1.0, clip_limit=4.0)
-        return restored, "Applied Glare Reduction (CLAHE)"
-        
+    try:
+        deblurred_image = process_with_nafnet(image)
+        messages.append("Applied NAFNet deblurring")
+    except Exception as exc:
+        deblurred_image = image
+        messages.append(f"Skipped NAFNet deblurring: {exc}")
+
+    darkir_source = deblurred_image
+    darkir_gamma = 1.5
+    darkir_clip_limit = 3.0
+
+    if condition == 'Glare':
+        darkir_gamma = 1.0
+        darkir_clip_limit = 4.0
+        messages.append("Applied DarkIR glare reduction")
+    elif condition == 'Night':
+        messages.append("Applied DarkIR low-light restoration")
     elif condition == 'Haze':
-        # Apply AOD-Net or Dark Channel Prior
-        # Placeholder till dehaze module is built
-        return image, "Haze detected (Dehaze module pending)"
-        
+        messages.append("Applied DarkIR before final enhancement; dehaze module pending")
     elif condition == 'Rain' or condition == 'Clear (or Rain)':
-        # Apply MPRNet or our OpenCV Derain equivalent
-        # For our heuristic, we'll apply a light derain pass just in case
-        restored = remove_rain(image, kernel_size=(5, 5), threshold=60)
-        return restored, "Applied Derain Filter"
-        
-    return image, "No restoration needed"
-    '''
+        darkir_source = remove_rain(deblurred_image, kernel_size=(5, 5), threshold=60)
+        messages.append("Applied derain filter before DarkIR")
+        messages.append("Applied DarkIR after derain")
+    else:
+        messages.append("Applied DarkIR restoration")
+
+    darkir_restored = process_with_darkir(darkir_source)
+    restored = managing_contrast_and_brightness_mathematically(
+        darkir_restored,
+        gamma=darkir_gamma,
+        clip_limit=darkir_clip_limit,
+    )
+    messages.append("Applied final contrast and brightness enhancement")
+
+    return deblurred_image, darkir_restored, restored, "; ".join(messages)

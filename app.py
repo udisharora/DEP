@@ -1,9 +1,7 @@
 import streamlit as st
 from PIL import Image, ImageDraw
 import numpy as np
-import cv2
 
-# Import our custom modules
 from modules.classifier import classify_condition
 from modules.restoration import route_and_restore
 from modules.detector import detect_license_plates
@@ -12,15 +10,15 @@ from modules.ocr_engine import resize_and_clahe, extract_text
 st.set_page_config(page_title="Advanced ALPR Pipeline", layout="wide")
 
 st.title("Auto-Adaptive License Plate Recognition")
-st.write("An end-to-end ALPR pipeline that detects adverse weather/night conditions, adaptively restores the image, detects vehicles, crops license plates, and extracts alphanumeric text.")
+st.write("An end-to-end ALPR pipeline that classifies scene conditions, deblurs with NAFNet, restores low-light details with DarkIR, applies OCR-focused enhancement, detects license plates, and extracts alphanumeric text.")
 
 st.sidebar.header("Pipeline Architecture")
 st.sidebar.markdown("""
-1. **Classifier**: Night/Rain/Haze
-2. **Restoration**: Adaptive Routing
-3. **Detector**: YOLOv8 (Vehicle -> Plate)
-4. **Alignment**: Binarize & Warp
-5. **OCR Engine**: EasyOCR
+1. **Condition Classifier**: Night / Haze / Glare / Clear-or-Rain
+2. **Deblurring**: NAFNet
+3. **Low-Light Restoration**: DarkIR
+4. **Final Enhancement**: OCR-Focused Contrast Processing
+5. **Detector + OCR**: YOLOv8 Plate Detection + EasyOCR
 """)
 st.sidebar.info("Upload an image in the main panel to run the full 5-stage pipeline.")
 
@@ -32,32 +30,35 @@ if uploaded_file is not None:
     original_image = Image.open(uploaded_file).convert('RGB')
     img_np = np.array(original_image)
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.subheader("1. Original Image")
         st.image(original_image, use_column_width=True)
         
     with st.spinner("Running 5-Stage ALPR Pipeline..."):
-        # Stage 1: Condition Classifier --------TEMPORARY PLACEHOLDER--------
-        condition = 'test'  # Placeholder for testing
-        # condition = classify_condition(img_np)  # Uncomment when classifier is implemented
+        # Stage 1: Condition Classifier
+        condition = classify_condition(img_np)
         st.success(f"**Stage 1 - Classifier**: Detected Environment Condition => `{condition}`")
         
         # Stage 2: Adaptive Restoration
-        darkir_image, restored_image, restoration_msg = route_and_restore(original_image, condition)
+        deblurred_image, darkir_image, restored_image, restoration_msg = route_and_restore(original_image, condition)
         st.info(f"**Stage 2 - Restoration**: {restoration_msg}")
         
         with col2:
-            st.subheader("2. DarkIR Output")
-            st.image(darkir_image, use_column_width=True)
+            st.subheader("2. NAFNet Deblur Output")
+            st.image(deblurred_image, use_column_width=True)
 
         with col3:
-            st.subheader("3. Post-Processed Restoration")
+            st.subheader("3. DarkIR Output")
+            st.image(darkir_image, use_column_width=True)
+
+        with col4:
+            st.subheader("4. Final Restoration")
             st.image(restored_image, use_column_width=True)
             
-        # Stage 3: Deep License Plate Detection (YOLOv8)
+        # Stage 3: License Plate Detection (YOLOv8)
         st.write("---")
-        st.subheader("Stage 3: Deep License Plate Detection")
+        st.subheader("Stage 3: License Plate Detection")
         
         boxes = detect_license_plates(restored_image)
         
@@ -81,7 +82,7 @@ if uploaded_file is not None:
             # Stage 4: Plate ROI Extraction
             plate_crop = np.array(restored_image)[py1:py2, px1:px2]
             
-            # Stage 5: Binarization & OCR
+            # Stage 5: OCR preprocessing and text extraction
             enhanced_plate = resize_and_clahe(plate_crop)
             text, conf = extract_text(enhanced_plate) 
             
@@ -89,7 +90,7 @@ if uploaded_file is not None:
                 st.write("**License Plate ROI Extraction**")
                 st.image(plate_crop, channels="RGB", use_column_width=False, width=300)
                 
-                st.write("**Enhanced for OCR (CLAHE)**")
+                st.write("**Prepared for OCR**")
                 st.image(enhanced_plate, channels="GRAY", use_column_width=False, width=300)
                 
                 st.success(f"**Final Extracted Text:** `{text}` (Conf: {conf:.2f})")
