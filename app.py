@@ -6,6 +6,7 @@ from modules.classifier import classify_condition
 from modules.restoration import prepare_image_for_detection
 from modules.detector import detect_license_plates
 from modules.ocr_engine import resize_and_clahe, extract_text
+from modules.dark_ir import process_with_darkir
 from modules.nafnet import process_with_nafnet
 
 st.set_page_config(page_title="Advanced ALPR Pipeline", layout="wide")
@@ -90,8 +91,8 @@ if uploaded_file is not None:
                 st.write(f"Detected **License Plate** on the {detection_source} (Confidence: {best_box['score']:.2f})")
                 st.image(annotated_img, use_column_width=True)
                 
-            # Stage 4: Plate ROI Extraction
-            plate_crop = np.array(detection_image)[py1:py2, px1:px2]
+            # Stage 4: Plate ROI Extraction from the original image for best OCR quality
+            plate_crop = np.array(original_image)[py1:py2, px1:px2]
 
             try:
                 deblurred_plate = process_with_nafnet(plate_crop)
@@ -101,22 +102,40 @@ if uploaded_file is not None:
                 deblurred_plate = Image.fromarray(plate_crop)
                 plate_for_ocr = plate_crop
                 plate_deblur_msg = f"Skipped plate deblurring before OCR: {exc}"
+
+            plate_gray = np.mean(plate_for_ocr, axis=2) if len(plate_for_ocr.shape) == 3 else plate_for_ocr
+            plate_mean_brightness = float(np.mean(plate_gray))
+            if plate_mean_brightness < 60:
+                try:
+                    darkir_plate = process_with_darkir(plate_for_ocr)
+                    plate_for_ocr = np.array(darkir_plate)
+                    plate_darkir_msg = "Applied DarkIR to the extracted plate because it was too dark"
+                except Exception as exc:
+                    darkir_plate = Image.fromarray(plate_for_ocr) if not isinstance(plate_for_ocr, Image.Image) else plate_for_ocr
+                    plate_darkir_msg = f"Skipped DarkIR on the extracted plate: {exc}"
+            else:
+                darkir_plate = Image.fromarray(plate_for_ocr) if not isinstance(plate_for_ocr, Image.Image) else plate_for_ocr
+                plate_darkir_msg = "Skipped DarkIR on the extracted plate because brightness was sufficient"
             
             # Stage 5: OCR preprocessing and text extraction
             enhanced_plate = resize_and_clahe(plate_for_ocr)
             text, conf = extract_text(enhanced_plate) 
             
             with col4:
-                st.write("**License Plate ROI Extraction**")
+                st.write("**License Plate ROI Extraction (From Original Image)**")
                 st.image(plate_crop, channels="RGB", use_column_width=False, width=300)
 
                 st.write("**Deblurred Plate for OCR**")
                 st.image(deblurred_plate, use_column_width=False, width=300)
+
+                st.write("**DarkIR on Plate (If Needed)**")
+                st.image(darkir_plate, use_column_width=False, width=300)
                 
                 st.write("**Prepared for OCR**")
                 st.image(enhanced_plate, channels="GRAY", use_column_width=False, width=300)
 
                 st.caption(plate_deblur_msg)
+                st.caption(plate_darkir_msg)
                 
                 st.success(f"**Final Extracted Text:** `{text}` (Conf: {conf:.2f})")
 
