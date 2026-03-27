@@ -1,7 +1,7 @@
 from modules.dark_ir import process_with_darkir
 from modules.nafnet import process_with_nafnet
 
-def prepare_image_for_detection(image, condition):
+def prepare_image_for_detection(image):
     """
     Always deblur the image first for detection, then prepare a DarkIR fallback
     image only if a second detection pass is needed.

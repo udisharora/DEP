@@ -5,3 +5,6 @@ __pycache__/
 streamlit.log
 .vscode/
 NAFNet-*.pt
+*.pth
+NAFNet/
+DarkIR/
