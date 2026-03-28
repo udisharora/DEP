@@ -97,19 +97,22 @@ if uploaded_file is not None:
 
             plate_crop_raw = np.array(detection_image)[new_py1:new_py2, new_px1:new_px2]
             
-            # Define 10 different padding scales (from 0% to 18%)
-            padding_scales = [0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.12, 0.14, 0.16, 0.18]
+            # Define 4 different padding scales (0%, 5%, 10%, 15%) and perform each once
+            padding_scales = [0.0, 0.05, 0.10, 0.15]
             predictions = []
 
-            # Execute Test-Time Augmentation (TTA) loop across the padded image sizes
             for pad_scale in padding_scales:
                 pad_y = int(plate_crop_raw.shape[0] * pad_scale)
                 pad_x = int(plate_crop_raw.shape[1] * pad_scale)
+                new_h = plate_crop_raw.shape[0] + 2 * pad_y
+                new_w = plate_crop_raw.shape[1] + 2 * pad_x
+                if new_h < 20 or new_w < 20:
+                    continue
                 padded = np.pad(plate_crop_raw, ((pad_y, pad_y), (pad_x, pad_x), (0, 0)), mode='constant', constant_values=255)
-                
                 try:
                     deblurred = process_with_nafnet(padded)
-                    sr_result = enhance_image_resolution(np.array(deblurred))
+                    # sr_result = enhance_image_resolution(np.array(deblurred))  # Swin2SR temporarily removed
+                    sr_result = deblurred  # Use deblurred image directly
                     extracted_txt, extracted_conf = extract_text(sr_result)
                     predictions.append((extracted_txt, extracted_conf, sr_result, padded))
                 except Exception:
