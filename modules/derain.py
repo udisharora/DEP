@@ -50,3 +50,12 @@ def remove_rain(image, kernel_size=(5, 5), threshold=50):
         derained = cv2.inpaint(img_np, streak_mask, 3, cv2.INPAINT_TELEA)
         
     return Image.fromarray(derained)
+
+def process_with_derain(image, kernel_size=(5, 5), threshold=50, math_fallback=True):
+    """
+    Restore a rainy image and return the result as a PIL image.
+    Structured to allow Deep Learning models in the future.
+    """
+    if math_fallback:
+        return remove_rain(image, kernel_size, threshold)
+    return image

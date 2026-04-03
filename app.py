@@ -8,18 +8,21 @@ from modules.ocr_engine import extract_text
 from modules.nafnet import process_with_nafnet
 from modules.rto_metadata import parse_rto_metadata
 from modules.super_resolution import enhance_image_resolution
+from modules.vehicle_lookup import fetch_vehicle_data
 
 st.set_page_config(page_title="Advanced ALPR Pipeline", layout="wide")
 
 st.title("Auto-Adaptive License Plate Recognition")
-st.write("A detection-first ALPR pipeline that always deblurs once before detection, uses DarkIR only as a fallback detection pass, and finally deblurs the cropped plate before OCR.")
+st.write("A detection-first ALPR pipeline that always deblurs once before detection, uses DarkIR, DeHaze and DeRain as fallback detection passes, and finally deblurs the cropped plate before OCR.")
 
 st.sidebar.header("Pipeline Architecture")
 st.sidebar.markdown("""
 1. **Prep 1**: Always deblur with NAFNet
 2. **Detection Pass 1**: Try YOLOv8 on the deblurred image
 3. **Fallback Prep 2**: Apply DarkIR on the deblurred image
-4. **Plate OCR**: Crop plate -> deblur crop -> TrOCR Engine
+4. **Fallback Prep 3**: Apply DeHaze on the deblurred image
+5. **Fallback Prep 4**: Apply DeRain on the deblurred image
+6. **Plate OCR**: Crop plate -> deblur crop -> TrOCR Engine
 """)
 st.sidebar.info("Upload an image in the main panel to run the ALPR pipeline.")
 
@@ -31,33 +34,53 @@ if uploaded_file is not None:
     original_image = Image.open(uploaded_file).convert('RGB')
     img_np = np.array(original_image)
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     with col1:
         st.subheader("1. Original Image")
         st.image(original_image, use_column_width=True)
 
     with st.spinner("Running ALPR Pipeline..."):
-        darkir_image, fallback_image, restoration_msg = prepare_image_for_detection(original_image)
+        darkir_image, dehazed_image, derained_image, fallback_image, restoration_msg = prepare_image_for_detection(original_image)
+        
         detection_image = fallback_image
+        detection_source = "deblurred image"
         boxes = detect_license_plates(detection_image)
-        used_initial_detection = len(boxes) > 0
 
-        if not used_initial_detection:
+        if len(boxes) == 0:
             detection_image = darkir_image
+            detection_source = "DarkIR fallback image"
+            boxes = detect_license_plates(detection_image)
+            
+        if len(boxes) == 0:
+            detection_image = dehazed_image
+            detection_source = "DeHaze fallback image"
+            boxes = detect_license_plates(detection_image)
+
+        if len(boxes) == 0:
+            detection_image = derained_image
+            detection_source = "DeRain fallback image"
             boxes = detect_license_plates(detection_image)
 
         st.info(f"**Detection Preparation**: {restoration_msg}")
 
         with col2:
-            st.subheader("2. NAFNet Deblur Output")
+            st.subheader("2. NAFNet")
             st.image(fallback_image, use_column_width=True)
 
         with col3:
-            st.subheader("3. DarkIR Fallback Output")
+            st.subheader("3. DarkIR")
             st.image(darkir_image, use_column_width=True)
 
         with col4:
-            st.subheader("4. Detection Image Used")
+            st.subheader("4. DeHaze")
+            st.image(dehazed_image, use_column_width=True)
+
+        with col5:
+            st.subheader("5. DeRain")
+            st.image(derained_image, use_column_width=True)
+
+        with col6:
+            st.subheader("6. Detection Used")
             st.image(detection_image, use_column_width=True)
             
         # Stage 3: License Plate Detection (YOLOv8)
@@ -66,7 +89,7 @@ if uploaded_file is not None:
 
         col3, col4 = st.columns(2)
         if len(boxes) == 0:
-            st.warning("No license plates detected on either the deblurred image or the DarkIR fallback image.")
+            st.warning("No license plates detected on either the deblurred image, the DarkIR fallback, the DeHaze fallback, or the DeRain fallback image.")
         else:
             # Draw boxes on image
             annotated_img = detection_image.copy()
@@ -78,10 +101,6 @@ if uploaded_file is not None:
             draw.rectangle([px1, py1, px2, py2], outline="red", width=3)
 
             with col3:
-                if used_initial_detection:
-                    detection_source = "deblurred image"
-                else:
-                    detection_source = "DarkIR fallback image"
                 st.write(f"Detected **License Plate** on the {detection_source} (Confidence: {best_box['score']:.2f})")
                 st.image(annotated_img, use_column_width=True)
 
@@ -148,6 +167,26 @@ if uploaded_file is not None:
                 rto_meta = parse_rto_metadata(text)
                 if rto_meta["state"] != "Unknown" and rto_meta["state"] != "Unknown RTO State":
                     st.info(f"📍 **Registered In:** {rto_meta['state']} (RTO Code: {rto_meta['district_code']})")
+
+                st.markdown("---")
+                st.subheader("Vehicle Details")
+                if st.button("Fetch RegCheck API Data"):
+                    with st.spinner("Fetching data from RegCheck API..."):
+                        vehicle_info = fetch_vehicle_data(text)
+                        if vehicle_info["valid"]:
+                            v_data = vehicle_info["data"]
+                            col_a, col_b = st.columns(2)
+                            with col_a:
+                                st.write(f"**Owner:** {v_data.get('owner', 'N/A')}")
+                                st.write(f"**Make & Model:** {v_data.get('make', 'N/A')} {v_data.get('model', '')}")
+                                st.write(f"**Engine & Fuel:** {v_data.get('engine', 'N/A')}cc | {v_data.get('fuel', 'N/A')}")
+                            with col_b:
+                                st.write(f"**Location:** {v_data.get('location', 'N/A')}")
+                                st.write(f"**Registration Date:** {v_data.get('registration_date', v_data.get('year', 'N/A'))}")
+                                st.write(f"**Insurance Expiry:** {v_data.get('insurance', 'N/A')}")
+                            st.success("Vehicle data retrieved from RegCheck successfully!")
+                        else:
+                            st.error(f"Could not fetch vehicle data via RegCheck: {vehicle_info.get('error', 'Unknown Error')}")
 
             if len(predictions) > 0:
                 st.markdown("---")
