@@ -7,7 +7,6 @@ from modules.detector import detect_license_plates
 from modules.ocr_engine import extract_text
 from modules.nafnet import process_with_nafnet
 from modules.rto_metadata import parse_rto_metadata
-from modules.super_resolution import enhance_image_resolution
 from modules.vehicle_lookup import fetch_vehicle_data
 
 st.set_page_config(page_title="Advanced ALPR Pipeline", layout="wide")
