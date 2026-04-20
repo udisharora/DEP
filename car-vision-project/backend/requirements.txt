@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+celery
+redis
+# Swapping for headless specifically to satisfy ultralytics in Docker
+opencv-python-headless
+numpy==1.26.4
+Pillow==10.4.0
+nafnetlib
+ultralytics
+transformers

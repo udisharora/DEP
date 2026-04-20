@@ -8,3 +8,4 @@ NAFNet-*.pt
 *.pth
 NAFNet/
 DarkIR/
+node_modules/
