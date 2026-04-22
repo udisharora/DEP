@@ -70,12 +70,16 @@ services:
       dockerfile: Dockerfile.prometheus
     ports:
       - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus  # Persists all scraped time-series data across container restarts
 
   # 7. Metrics Dashboard (Grafana)
   grafana:
     image: grafana/grafana:latest
     ports:
       - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana  # Persists dashboards, data sources, and user settings
     depends_on:
       - prometheus
 
@@ -83,4 +87,6 @@ services:
 volumes:
   shared_uploads:
   hf_cache:
-  lora_weights:  # Stores LoRA adapter weights; survives container restarts and hot-injection
+  lora_weights:    # Stores LoRA adapter weights; survives container restarts and hot-injection
+  prometheus_data: # Stores Prometheus TSDB time-series data; survives container deletion
+  grafana_data:    # Stores Grafana dashboards, data sources, and user config
