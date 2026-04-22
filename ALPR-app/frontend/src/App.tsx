@@ -172,30 +172,48 @@ function App() {
             </div>
 
             <section className={styles.sequentialSection}>
-               <div className={styles.imageBlock}>
-                 <h3>1. Original Image</h3>
-                 {resultData.original_image && <img src={resultData.original_image} alt="Original" />}
-               </div>
-               <div className={styles.imageBlock}>
-                 <h3>2. NAFNet</h3>
-                 {resultData.nafnet_image && <img src={resultData.nafnet_image} alt="NAFNet" />}
-               </div>
-               <div className={styles.imageBlock}>
-                 <h3>3. DarkIR</h3>
-                 {resultData.darkir_image && <img src={resultData.darkir_image} alt="DarkIR" />}
-               </div>
-               <div className={styles.imageBlock}>
-                 <h3>4. DeHaze</h3>
-                 {resultData.dehaze_image && <img src={resultData.dehaze_image} alt="DeHaze" />}
-               </div>
-               <div className={styles.imageBlock}>
-                 <h3>5. DeRain</h3>
-                 {resultData.derain_image && <img src={resultData.derain_image} alt="DeRain" />}
-               </div>
-               <div className={styles.imageBlock}>
-                 <h3>6. Detection Used</h3>
-                 {resultData.detection_used && <img src={resultData.detection_used} alt="Detection Used" />}
-               </div>
+              <div className={styles.imageBlock}>
+                <h3>Classifier Result</h3>
+                <div className={styles.moduleStatus}>{resultData.restoration_msg}</div>
+              </div>
+              <div className={styles.imageBlock}>
+                <h3>Restoration Applied</h3>
+                {resultData.nafnet_image && (
+                  <>
+                    <img src={resultData.nafnet_image} alt="NAFNet Output" />
+                    <div className={styles.moduleStatus}>NAFNet Applied</div>
+                  </>
+                )}
+                {resultData.darkir_image && (
+                  <>
+                    <img src={resultData.darkir_image} alt="DarkIR Output" />
+                    <div className={styles.moduleStatus}>DarkIR Applied</div>
+                  </>
+                )}
+                {resultData.dehaze_image && (
+                  <>
+                    <img src={resultData.dehaze_image} alt="DeHaze Output" />
+                    <div className={styles.moduleStatus}>DeHaze Applied</div>
+                  </>
+                )}
+                {resultData.derain_image && (
+                  <>
+                    <img src={resultData.derain_image} alt="DeRain Output" />
+                    <div className={styles.moduleStatus}>DeRain Applied</div>
+                  </>
+                )}
+                {!resultData.nafnet_image && !resultData.darkir_image && !resultData.dehaze_image && !resultData.derain_image && (
+                  <div className={styles.moduleStatus}>No restoration applied</div>
+                )}
+              </div>
+              <div className={styles.imageBlock}>
+                <h3>Detection Used</h3>
+                {resultData.detection_used ? (
+                  <img src={resultData.detection_used} alt="Detection Used" />
+                ) : (
+                  <div className={styles.moduleStatus}>Detection Used: Not available</div>
+                )}
+              </div>
             </section>
 
             <section className={styles.detectionSection}>

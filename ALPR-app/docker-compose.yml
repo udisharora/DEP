@@ -1,67 +1,85 @@
 services:
-  # 1. The Message Broker (In-Memory Queue) [cite: 2180, 2181]
+  # 1. The Message Broker (In-Memory Queue)
   redis:
     image: redis:alpine
     expose:
       - "6379"
     restart: always
 
-  # 2. The API Gateway (FastAPI) [cite: 2670]
+  # 2. The API Gateway (FastAPI)
   backend:
     build: ./backend
     environment:
       - REDIS_URL=redis://redis:6379/0
       - SHARED_UPLOADS_DIR=/app/shared_uploads
-      - HF_HOME=/app/.huggingface_cache # Tells transformers where to store weights [cite: 2856]
-      - LORA_ADAPTER_PATH=/app/lora_adapters # Path where LoRA adapter weights are injected
+      - HF_HOME=/app/.huggingface_cache
+      - LORA_ADAPTER_PATH=/app/lora_adapters  # Path where LoRA adapter weights are injected
     volumes:
-      - shared_uploads:/app/shared_uploads # Claim Check Pattern volume [cite: 2673]
-      - hf_cache:/app/.huggingface_cache   # Cache volume to prevent re-downloading TrOCR [cite: 2855, 2859]
-      - lora_weights:/app/lora_adapters    # Persistent volume for LoRA fine-tuned adapter weights
-    expose:
-      - "8000"
+      - ./backend/data:/app/data                                    # Sync active learning data to Mac
+      - shared_uploads:/app/shared_uploads
+      - hf_cache:/app/.huggingface_cache                            # Persistent base model cache
+      - lora_weights:/app/lora_adapters                             # Persistent LoRA adapter weights
+    ports:
+      - "8000:8000"
     depends_on:
       - redis
 
-  # 3. The ML Execution Engine (Celery) [cite: 2186, 2187]
+  # 3. The ML Execution Engine (Celery)
   worker:
     build: ./backend
     environment:
       - REDIS_URL=redis://redis:6379/0
       - SHARED_UPLOADS_DIR=/app/shared_uploads
       - HF_HOME=/app/.huggingface_cache
-      - LORA_ADAPTER_PATH=/app/lora_adapters # Path where LoRA adapter weights are injected
-      # Prevent CPU oversubscription: Force C++ math libraries to use 1 thread [cite: 2345, 2675]
+      - LORA_ADAPTER_PATH=/app/lora_adapters  # Path where LoRA adapter weights are injected
+      # Prevent CPU oversubscription: Force C++ math libraries to use 1 thread
       - OMP_NUM_THREADS=1
       - OPENBLAS_NUM_THREADS=1
       - MKL_NUM_THREADS=1
     volumes:
+      - ./backend/data:/app/data
       - shared_uploads:/app/shared_uploads
       - hf_cache:/app/.huggingface_cache
-      - lora_weights:/app/lora_adapters    # Persistent volume for LoRA fine-tuned adapter weights
-    # Spawn 4 workers, kill and refresh a worker after 5 tasks to prevent memory leaks [cite: 2675, 3073, 3074]
+      - lora_weights:/app/lora_adapters                             # Persistent LoRA adapter weights
+    # Spawn 4 workers, kill and refresh a worker after 5 tasks to prevent memory leaks
     command: celery -A tasks.celery_app worker --loglevel=info --concurrency=4 --max-tasks-per-child=5
     depends_on:
       - redis
 
-  # 4. The Presentation Layer (React + TS) [cite: 2670]
+  # 4. The Presentation Layer (React + TS)
   frontend:
     build: ./frontend
     expose:
       - "80"
 
-  # 5. The Reverse Proxy (Nginx) [cite: 2672]
+  # 5. The Reverse Proxy (Nginx)
   nginx:
     image: nginx:alpine
     ports:
-      - "80:80" # This is the ONLY port exposed to your Mac/Internet [cite: 1890, 2158]
+      - "8080:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - frontend
       - backend
 
-# Define persistent storage locations [cite: 2673, 2859]
+  # 6. Metrics Scraper (Prometheus)
+  prometheus:
+    build:
+      context: .
+      dockerfile: Dockerfile.prometheus
+    ports:
+      - "9090:9090"
+
+  # 7. Metrics Dashboard (Grafana)
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+# Define persistent storage locations
 volumes:
   shared_uploads:
   hf_cache:
