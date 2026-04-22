@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 from PIL import Image
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+from peft import PeftModel
 import re
 import torch
 import os
@@ -19,7 +20,24 @@ try:
         processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-printed', cache_dir=cache_directory)
         model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-printed', cache_dir=cache_directory)
         print("TrOCR downloaded and saved to volume.")
-        
+
+    # ── LoRA Adapter Injection ────────────────────────────────────────────
+    # After each fine-tuning cycle, auto_retrain.py copies the adapter weights
+    # into LORA_ADAPTER_PATH inside the container.  If they exist, we wrap
+    # the frozen base model with PeftModel to merge the delta weights.
+    # If they are absent (first boot, before any fine-tuning), we fall back
+    # gracefully to the plain base model.
+    LORA_ADAPTER_PATH = os.environ.get('LORA_ADAPTER_PATH', '/app/lora_adapters')
+    if os.path.isdir(LORA_ADAPTER_PATH) and os.path.exists(os.path.join(LORA_ADAPTER_PATH, 'adapter_config.json')):
+        print(f"LoRA adapter weights found at {LORA_ADAPTER_PATH}. Applying adapters to base model...")
+        model = PeftModel.from_pretrained(model, LORA_ADAPTER_PATH)
+        # Merge the adapter weights into the base model weights for faster inference
+        # (no runtime overhead from the LoRA branches)
+        model = model.merge_and_unload()
+        print("LoRA adapters merged into base model. Ready for inference.")
+    else:
+        print(f"No LoRA adapters found at {LORA_ADAPTER_PATH}. Using base TrOCR model.")
+
     #----REMOVED GPU OPTION
     device = 'cpu'
     model.to(device)

@@ -10,3 +10,5 @@ Pillow==10.4.0
 nafnetlib
 ultralytics
 transformers
+torch
+peft       # Parameter Efficient Fine-Tuning — used to load LoRA adapter weights at inference

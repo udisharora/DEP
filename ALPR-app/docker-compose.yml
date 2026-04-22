@@ -13,9 +13,11 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SHARED_UPLOADS_DIR=/app/shared_uploads
       - HF_HOME=/app/.huggingface_cache # Tells transformers where to store weights [cite: 2856]
+      - LORA_ADAPTER_PATH=/app/lora_adapters # Path where LoRA adapter weights are injected
     volumes:
       - shared_uploads:/app/shared_uploads # Claim Check Pattern volume [cite: 2673]
       - hf_cache:/app/.huggingface_cache   # Cache volume to prevent re-downloading TrOCR [cite: 2855, 2859]
+      - lora_weights:/app/lora_adapters    # Persistent volume for LoRA fine-tuned adapter weights
     expose:
       - "8000"
     depends_on:
@@ -28,6 +30,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SHARED_UPLOADS_DIR=/app/shared_uploads
       - HF_HOME=/app/.huggingface_cache
+      - LORA_ADAPTER_PATH=/app/lora_adapters # Path where LoRA adapter weights are injected
       # Prevent CPU oversubscription: Force C++ math libraries to use 1 thread [cite: 2345, 2675]
       - OMP_NUM_THREADS=1
       - OPENBLAS_NUM_THREADS=1
@@ -35,6 +38,7 @@ services:
     volumes:
       - shared_uploads:/app/shared_uploads
       - hf_cache:/app/.huggingface_cache
+      - lora_weights:/app/lora_adapters    # Persistent volume for LoRA fine-tuned adapter weights
     # Spawn 4 workers, kill and refresh a worker after 5 tasks to prevent memory leaks [cite: 2675, 3073, 3074]
     command: celery -A tasks.celery_app worker --loglevel=info --concurrency=4 --max-tasks-per-child=5
     depends_on:
@@ -61,3 +65,4 @@ services:
 volumes:
   shared_uploads:
   hf_cache:
+  lora_weights:  # Stores LoRA adapter weights; survives container restarts and hot-injection
