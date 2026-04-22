@@ -1,0 +1,6 @@
+outs:
+- md5: eb73e64e22b4a8a7f3f0473212ff0c59.dir
+  size: 2669492299
+  nfiles: 25
+  hash: md5
+  path: .huggingface_cache

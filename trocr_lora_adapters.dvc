@@ -1,0 +1,6 @@
+outs:
+- md5: f16c2fd236467d9e1776cf1fb8b54d90.dir
+  size: 6115420
+  nfiles: 3
+  hash: md5
+  path: trocr_lora_adapters
