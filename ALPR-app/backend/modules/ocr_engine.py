@@ -4,10 +4,22 @@ from PIL import Image
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 import re
 import torch
+import os
 
 try:
-    processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-printed')
-    model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-printed')
+    cache_directory = os.environ.get('HF_HOME', '/app/.huggingface_cache')
+    try:
+        # Attempt to load completely offline from the Docker volume first
+        processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-printed', cache_dir=cache_directory, local_files_only=True)
+        model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-printed', cache_dir=cache_directory, local_files_only=True)
+        print("TrOCR loaded successfully from persistent volume.")
+    except Exception:
+        # Fallback to downloading if the volume is empty
+        print("TrOCR not found in volume. Downloading from internet...")
+        processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-printed', cache_dir=cache_directory)
+        model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-printed', cache_dir=cache_directory)
+        print("TrOCR downloaded and saved to volume.")
+        
     #----REMOVED GPU OPTION
     device = 'cpu'
     model.to(device)
