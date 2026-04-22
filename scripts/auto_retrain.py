@@ -1,3 +1,4 @@
+import sys
 import time
 import subprocess
 import os
@@ -51,7 +52,8 @@ def trigger_retraining():
     print("Initiating LoRA Continuous Training (CT) Pipeline...")
 
     try:
-        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        backend_dir  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        compose_dir  = os.path.join(backend_dir, "ALPR-app")  # Where docker-compose.yml lives
         delta_csv      = "data/delta_metadata.csv"
         delta_csv_path = os.path.join(backend_dir, delta_csv)
 
@@ -64,9 +66,11 @@ def trigger_retraining():
         # Outputs: trocr_lora_adapters/adapter_model.bin
         #          trocr_lora_adapters/adapter_config.json
         print("\n[Step 1/4] Running LoRA fine-tuning...")
+        # Use sys.executable so we call the same Python interpreter (conda env)
+        # that is running this daemon — not the system `python3`.
         subprocess.run(
             [
-                "python3", "training/train_trocr_lora.py",
+                sys.executable, "training/train_trocr_lora.py",
                 "--dataset", delta_csv,
                 "--img_dir", "data/delta_batch",
                 "--output",  LORA_ADAPTER_DIR,
@@ -82,15 +86,16 @@ def trigger_retraining():
         # This avoids a full `docker build` and any VirtioFS deadlocks.
         adapter_local_path = os.path.join(backend_dir, LORA_ADAPTER_DIR)
         print(f"\n[Step 2/4] Copying LoRA adapters → containers ({CONTAINER_LORA_PATH})...")
-        subprocess.run(["docker", "cp", adapter_local_path, f"alpr-app-worker-1:{CONTAINER_LORA_PATH}"],  check=True)
-        subprocess.run(["docker", "cp", adapter_local_path, f"alpr-app-backend-1:{CONTAINER_LORA_PATH}"], check=True)
+        # Trailing slash on the source copies the *contents* of the directory
+        # into CONTAINER_LORA_PATH directly, avoiding a nested sub-directory.
+        subprocess.run(["docker", "cp", adapter_local_path + "/.", f"alpr-app-worker-1:{CONTAINER_LORA_PATH}"],  check=True)
+        subprocess.run(["docker", "cp", adapter_local_path + "/.", f"alpr-app-backend-1:{CONTAINER_LORA_PATH}"], check=True)
         print("  ✅ Adapter weights injected.")
 
         # ── Step 3: Restart containers to reload ocr_engine.py ───────
-        # The restart forces Python to re-import ocr_engine, which will
-        # detect the new adapters in CONTAINER_LORA_PATH and merge them.
+        # docker compose must run from the directory containing docker-compose.yml
         print("\n[Step 3/4] Restarting worker and backend containers...")
-        subprocess.run(["docker", "compose", "restart", "worker", "backend"], check=True)
+        subprocess.run(["docker", "compose", "restart", "worker", "backend"], check=True, cwd=compose_dir)
         print("  ✅ Containers restarted with new LoRA weights.")
 
         # ── Step 4: Purge the delta batch to reset the queue ─────────
@@ -123,7 +128,7 @@ if __name__ == "__main__":
         if queue_size >= 10:
             trigger_retraining()
             print("Sleeping for 10 minutes (cooldown) before monitoring again...")
-            time.sleep(600)  # Cooldown period so we don't spam hardware
-
-        time.sleep(30)  # Poll directory every 30 seconds
+            time.sleep(600)  # Cooldown period so we don't spam hardware on rapid drift
+        else:
+            time.sleep(30)  # Poll directory every 30 seconds when queue is below threshold
 

@@ -10,3 +10,7 @@ NAFNet/
 DarkIR/
 node_modules/
 data/
+trocr_lora_adapters/
+.huggingface_cache/
+/trocr_lora_adapters
+/.huggingface_cache

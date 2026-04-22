@@ -4,7 +4,7 @@ LoRA Fine-Tuning Script for TrOCR (microsoft/trocr-base-printed)
 Uses PEFT (Parameter Efficient Fine-Tuning) to train only a small
 set of low-rank adapter weights instead of all model parameters.
 
-Output: A directory of LoRA adapter weights (adapter_model.bin +
+Output: A directory of LoRA adapter weights (adapter_model.safetensors +
         adapter_config.json) that can be hot-injected at inference
         time without touching the frozen base model.
 
@@ -14,29 +14,36 @@ Usage:
         --img_dir  data/delta_batch \
         --output   trocr_lora_adapters \
         --epochs   3
+
+Fixed bugs:
+    - VisionEncoderDecoderConfig.pad_token_id AttributeError (set explicitly)
+    - decoder_start_token_id not set (causes silent bad generation)
+    - Forward pass generates decoder_input_ids from labels via shift_tokens_right
 """
 
 import argparse
 import os
 import csv
+import sys
 import torch
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from peft import LoraConfig, get_peft_model, TaskType
 
+
 # ──────────────────────────────────────────────
 # 1. CLI Arguments
 # ──────────────────────────────────────────────
 parser = argparse.ArgumentParser(description="LoRA fine-tuning for TrOCR")
-parser.add_argument("--dataset",  required=True,  help="Path to delta_metadata.csv")
-parser.add_argument("--img_dir",  required=True,  help="Directory containing plate images")
-parser.add_argument("--output",   default="trocr_lora_adapters", help="Output dir for LoRA adapter weights")
-parser.add_argument("--epochs",   type=int, default=3,  help="Number of training epochs")
-parser.add_argument("--lr",       type=float, default=5e-4, help="Learning rate")
-parser.add_argument("--batch",    type=int, default=4,   help="Batch size")
-parser.add_argument("--lora_r",   type=int, default=16,  help="LoRA rank")
-parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha scaling factor")
+parser.add_argument("--dataset",    required=True,            help="Path to delta_metadata.csv")
+parser.add_argument("--img_dir",    required=True,            help="Directory containing plate images")
+parser.add_argument("--output",     default="trocr_lora_adapters", help="Output dir for LoRA adapter weights")
+parser.add_argument("--epochs",     type=int,   default=3,    help="Number of training epochs")
+parser.add_argument("--lr",         type=float, default=5e-4, help="Learning rate")
+parser.add_argument("--batch",      type=int,   default=4,    help="Batch size")
+parser.add_argument("--lora_r",     type=int,   default=16,   help="LoRA rank")
+parser.add_argument("--lora_alpha", type=int,   default=32,   help="LoRA alpha scaling factor")
 args = parser.parse_args()
 
 
@@ -47,21 +54,27 @@ class PlateDataset(Dataset):
     """
     Reads (image_filename, plate_text) pairs from the delta CSV and
     returns (pixel_values, labels) tensors ready for TrOCR training.
+
+    CSV columns expected: filename, text
+    (Written by tasks.py active-learning router)
     """
     def __init__(self, csv_path, img_dir, processor):
-        self.samples  = []
-        self.img_dir  = img_dir
+        self.samples   = []
+        self.img_dir   = img_dir
         self.processor = processor
 
         with open(csv_path, "r") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                # Expected columns: filename, plate_text
                 img_path = os.path.join(img_dir, row["filename"])
                 if os.path.exists(img_path):
-                    self.samples.append((img_path, row["plate_text"]))
+                    self.samples.append((img_path, row["text"]))
                 else:
                     print(f"  [WARN] Image not found, skipping: {img_path}")
+
+        if len(self.samples) == 0:
+            print("  [ERROR] No valid training samples found. Check --img_dir and CSV paths.")
+            sys.exit(1)
 
         print(f"  Loaded {len(self.samples)} training samples from {csv_path}")
 
@@ -86,7 +99,7 @@ class PlateDataset(Dataset):
             return_tensors="pt"
         ).input_ids.squeeze(0)
 
-        # Replace padding token id (0) with -100 so CrossEntropyLoss ignores it
+        # Replace pad token id with -100 so CrossEntropyLoss ignores padding positions
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
 
         return pixel_values, labels
@@ -95,10 +108,16 @@ class PlateDataset(Dataset):
 # ──────────────────────────────────────────────
 # 3. Load Base Model and Apply LoRA
 # ──────────────────────────────────────────────
-cache_dir = os.environ.get("HF_HOME", "/app/.huggingface_cache")
+# When running locally on Mac: default to DEP/.huggingface_cache
+# When running inside Docker: HF_HOME=/app/.huggingface_cache is set by docker-compose
+default_cache = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", ".huggingface_cache")
+)
+cache_dir = os.environ.get("HF_HOME", default_cache)
 device    = "cuda" if torch.cuda.is_available() else "cpu"
+
 print(f"\n[LoRA Trainer] Device: {device}")
-print(f"[LoRA Trainer] Loading base TrOCR from cache: {cache_dir}")
+print(f"[LoRA Trainer] Cache dir: {cache_dir}")
 
 processor = TrOCRProcessor.from_pretrained(
     "microsoft/trocr-base-printed",
@@ -112,6 +131,16 @@ base_model = VisionEncoderDecoderModel.from_pretrained(
     local_files_only=False
 )
 
+# ── FIX 1: Set required token IDs on the model config ────────────────────────
+# VisionEncoderDecoderModel.forward() reads pad_token_id and
+# decoder_start_token_id from model.config. Without this, the forward pass
+# raises: AttributeError: 'VisionEncoderDecoderConfig' has no attribute 'pad_token_id'
+base_model.config.pad_token_id          = processor.tokenizer.pad_token_id
+base_model.config.decoder_start_token_id = processor.tokenizer.bos_token_id
+# Also set on the decoder config for completeness
+base_model.config.decoder.bos_token_id  = processor.tokenizer.bos_token_id
+base_model.config.decoder.pad_token_id  = processor.tokenizer.pad_token_id
+
 # LoRA configuration — target the query and value projection matrices inside
 # the decoder attention layers (most impactful for sequence generation tasks)
 lora_config = LoraConfig(
@@ -119,14 +148,13 @@ lora_config = LoraConfig(
     r=args.lora_r,
     lora_alpha=args.lora_alpha,
     lora_dropout=0.1,
-    # Target the attention projection layers inside the decoder transformer
     target_modules=["q_proj", "v_proj"],
     bias="none",
 )
 
 # Wrap the base model: only LoRA adapter parameters will have requires_grad=True
 model = get_peft_model(base_model, lora_config)
-model.print_trainable_parameters()  # Prints how many params we're actually training
+model.print_trainable_parameters()
 model.to(device)
 
 
@@ -155,10 +183,30 @@ for epoch in range(args.epochs):
         pixel_values = pixel_values.to(device)
         labels       = labels.to(device)
 
-        # Forward pass: VisionEncoderDecoderModel computes cross-entropy loss
-        # when decoder_input_ids / labels are passed
-        outputs = model(pixel_values=pixel_values, labels=labels)
-        loss    = outputs.loss
+        # ── FIX 2: Pass decoder_input_ids explicitly ──────────────────────────
+        # VisionEncoderDecoderModel.forward() requires decoder_input_ids when
+        # labels are provided (it does not auto-generate them in all versions).
+        # We shift the labels right to produce the teacher-forced decoder input.
+        # Positions where labels == -100 (padding) are replaced with pad_token_id.
+        decoder_input_ids = labels.clone()
+        decoder_input_ids[decoder_input_ids == -100] = processor.tokenizer.pad_token_id
+        # Shift right: prepend bos, drop last token
+        decoder_input_ids = torch.cat([
+            torch.full(
+                (decoder_input_ids.size(0), 1),
+                processor.tokenizer.bos_token_id,
+                dtype=torch.long,
+                device=device
+            ),
+            decoder_input_ids[:, :-1]
+        ], dim=1)
+
+        outputs = model(
+            pixel_values=pixel_values,
+            decoder_input_ids=decoder_input_ids,
+            labels=labels
+        )
+        loss = outputs.loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -166,8 +214,10 @@ for epoch in range(args.epochs):
 
         total_loss += loss.item()
 
-        if (step + 1) % 5 == 0:
-            print(f"  Epoch [{epoch+1}/{args.epochs}] Step [{step+1}/{len(dataloader)}] Loss: {loss.item():.4f}")
+        if (step + 1) % 5 == 0 or (step + 1) == len(dataloader):
+            print(f"  Epoch [{epoch+1}/{args.epochs}] "
+                  f"Step [{step+1}/{len(dataloader)}] "
+                  f"Loss: {loss.item():.4f}")
 
     avg_loss = total_loss / len(dataloader) if len(dataloader) > 0 else 0
     print(f"  ✅ Epoch {epoch+1} complete. Avg Loss: {avg_loss:.4f}")
@@ -176,10 +226,11 @@ for epoch in range(args.epochs):
 # ──────────────────────────────────────────────
 # 6. Save ONLY the LoRA Adapter Weights
 # ──────────────────────────────────────────────
-# This saves adapter_model.bin + adapter_config.json — NOT the full model.
+# Saves adapter_model.safetensors + adapter_config.json — NOT the full model.
 # These tiny files (<50MB) are injected at runtime on top of the frozen base.
 os.makedirs(args.output, exist_ok=True)
 model.save_pretrained(args.output)
-print(f"\n✅ LoRA adapter weights saved to: {args.output}")
-print("   Files: adapter_model.bin, adapter_config.json")
+
+print(f"\n✅ LoRA adapter weights saved to: {os.path.abspath(args.output)}")
+print("   Files: adapter_model.safetensors, adapter_config.json")
 print("   These will be hot-injected into the Docker containers.\n")

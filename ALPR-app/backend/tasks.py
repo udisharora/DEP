@@ -11,6 +11,10 @@ from modules.detector import detect_license_plates
 from modules.ocr_engine import extract_text
 from modules.nafnet import process_with_nafnet
 from modules.rto_metadata import parse_rto_metadata
+from modules.dark_ir import process_with_darkir
+from modules.dehaze import process_with_dehaze
+from modules.derain import process_with_derain
+from modules.classifier import classify_restoration_module
 
 # Get Redis connection URL from environment variable, default to localhost:6379 for development
 redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -43,7 +47,7 @@ def img_to_b64(img):
 
 # Define the Celery background task for Auto-Adaptive License Plate Recognition
 @celery_app.task
-def process_alpr_task(file_path):
+def process_alpr_task(file_path, true_label=None):
     try:
         # Load the uploaded original image from disk
         original_image = Image.open(file_path)
@@ -52,37 +56,54 @@ def process_alpr_task(file_path):
         original_image.load()
         original_image = original_image.convert('RGB')
         
+        # Track pipeline telemetry & drift
+        import time
+        import cv2
+        from modules.mlops_metrics import calculate_mlops_scores
+        start_inference_time = time.time()
+        
+        try:
+            cv_img = cv2.imread(file_path)
+            optimal_module = classify_restoration_module(cv_img)
+            gray_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+            blur_score = float(cv2.Laplacian(gray_img, cv2.CV_64F).var())
+            brightness = float(gray_img.mean())
+        except Exception:
+            optimal_module = 'normal'
+            blur_score = 0.0
+            brightness = -1.0
+
         # --- ML Logic Start ---
-        
-        # 1. Image Enhancement/Restoration
-        # The prepare_image_for_detection method restores the image via multiple fallback paths:
-        # It yields a darkir, dehazed, derained, and a final fallback image, plus a description message
-        darkir_image, dehazed_image, derained_image, fallback_image, restoration_msg = prepare_image_for_detection(original_image)
-        
+
+        # Only apply the selected restoration module
+        nafnet_image = None
+        darkir_image = None
+        dehaze_image = None
+        derain_image = None
+
+        if optimal_module == 'darkir':
+            detection_image = process_with_darkir(original_image)
+            darkir_image = detection_image
+            detection_source = "Routed to DarkIR Engine"
+        elif optimal_module == 'dehaze':
+            detection_image = process_with_dehaze(original_image)
+            dehaze_image = detection_image
+            detection_source = "Routed to DeHaze Engine"
+        elif optimal_module == 'derain':
+            detection_image = process_with_derain(original_image)
+            derain_image = detection_image
+            detection_source = "Routed to DeRain Engine"
+        else:
+            detection_image = process_with_nafnet(original_image)
+            nafnet_image = detection_image
+            detection_source = "Routed to NAFNet Engine"
+
+        restoration_msg = f"Mathematically Classified & Routed to: {optimal_module}"
+            
         # 2. License Plate Detection
-        # By default, attempt detection on the basic "deblurred" fallback image
-        detection_image = fallback_image
-        detection_source = "deblurred image"
         boxes = detect_license_plates(detection_image)
-
-        # If no plates are found, adaptively fallback to trying detection on the DarkIR processed image
-        if len(boxes) == 0:
-            detection_image = darkir_image
-            detection_source = "DarkIR fallback image"
-            boxes = detect_license_plates(detection_image)
-            
-        # If still no plates, adaptively fallback to DeHaze image
-        if len(boxes) == 0:
-            detection_image = dehazed_image
-            detection_source = "DeHaze fallback image"
-            boxes = detect_license_plates(detection_image)
-
-        # If still no plates, adaptively fallback to DeRain image
-        if len(boxes) == 0:
-            detection_image = derained_image
-            detection_source = "DeRain fallback image"
-            boxes = detect_license_plates(detection_image)
-            
+        bbox_count = len(boxes)
+        
         # Variables to store the final annotated image and the bounding box of the best plate
         annotated_img = None
         best_box = None
@@ -122,7 +143,7 @@ def process_alpr_task(file_path):
             # Crop out the raw license plate region using Numpy indexing
             plate_crop_raw = np.array(detection_image)[new_py1:new_py2, new_px1:new_px2]
             
-            # Test-Time Augmentation (TTA): Attempt OCR on padded versions of the crop
+            # Test-Time Augmentation (TTA) multi-scale padding arrays
             padding_scales = [0.0, 0.05, 0.10, 0.15]
             predictions = []
 
@@ -142,6 +163,10 @@ def process_alpr_task(file_path):
                     # Run the padded crop through NAFNet to deblur and super-resolve the image
                     deblurred = process_with_nafnet(padded)
                     sr_result = deblurred 
+                    
+                    # Convert to RGB just in case
+                    sr_result = sr_result.convert("RGB")
+                    
                     # Extract the plate text and confidence score via EasyOCR
                     extracted_txt, extracted_conf = extract_text(sr_result)
                     # Aggregate the prediction tuple
@@ -170,22 +195,70 @@ def process_alpr_task(file_path):
             # Lastly, parse the text string to infer State and District info
             rto_meta = parse_rto_metadata(text)
             
-        # Bundle all the gathered information and generated images into a single result dictionary
+        # -------------------------------------------------------------
+        # ACTIVE LEARNING DATA ROUTING (DELTA BATCH VS QUARANTINE)
+        # -------------------------------------------------------------
+        if conf > 0.0 and conf < 0.50:
+            import shutil
+            import csv
+            base_filename = os.path.basename(file_path)
+            if true_label is not None:
+                # Store specifically for Automated MLOps Delta Training
+                os.makedirs("data/delta_batch", exist_ok=True)
+                dest = os.path.join("data/delta_batch", base_filename)
+                shutil.copy(file_path, dest)
+                # Append to delta tracking metadata (add header if missing)
+                csv_path = "data/delta_metadata.csv"
+                write_header = not os.path.exists(csv_path)
+                with open(csv_path, "a", newline="") as csvfile:
+                    writer = csv.writer(csvfile)
+                    if write_header:
+                        writer.writerow(["filename", "text"])
+                    writer.writerow([base_filename, true_label])
+            else:
+                # Quaratine for Human Review (Unsupervised website traffic)
+                os.makedirs("data/needs_review", exist_ok=True)
+                dest = os.path.join("data/needs_review", base_filename)
+                shutil.copy(file_path, dest)
+        
+        import re
+        invalid_format = True
+        if text != "Failed OCR" and text != "Failed TTA OCR":
+            # Simple format heuristic for Indian Plates (Must end in roughly 4 digits and start with chars)
+            if re.search(r'[A-Za-z]+.*[0-9]{3,4}$', text):
+                invalid_format = False
+                
+        perf_scores = calculate_mlops_scores(text, true_label)
+        
+        # Proxy drift score: Penalize high blur, low brightness, low confidence
+        if blur_score > 0 and brightness > 0:
+            drift_score = 100.0 / max(1.0, blur_score) + abs(brightness - 128) + ((1.0 - conf) * 100)
+        else:
+            drift_score = 0.0
+            
         result = {
             "restoration_msg": restoration_msg,
             "detection_source": detection_source,
             "original_image": img_to_b64(original_image),
-            "nafnet_image": img_to_b64(fallback_image),
-            "darkir_image": img_to_b64(darkir_image),
-            "dehaze_image": img_to_b64(dehazed_image),
-            "derain_image": img_to_b64(derained_image),
+            "nafnet_image": img_to_b64(nafnet_image) if nafnet_image is not None else None,
+            "darkir_image": img_to_b64(darkir_image) if darkir_image is not None else None,
+            "dehaze_image": img_to_b64(dehaze_image) if dehaze_image is not None else None,
+            "derain_image": img_to_b64(derain_image) if derain_image is not None else None,
             "detection_used": img_to_b64(detection_image),
             "annotated_image": img_to_b64(annotated_img),
             "plate_crop": img_to_b64(plate_crop_padded),
             "plate_upscaled": img_to_b64(sr_plate),
             "extracted_text": text,
             "confidence": float(conf),
-            "rto_metadata": rto_meta
+            "rto_metadata": rto_meta,
+            "blur_score": blur_score,
+            "brightness": brightness,
+            "invalid_format": invalid_format,
+            "drift_score": drift_score,
+            "performance_scores": perf_scores,
+            "bbox_count": bbox_count,
+            "inference_time": float(time.time() - start_inference_time),
+            "restoration_used": optimal_module
         }
         # Return the final task payload, which is stored in Redis for the API layer to fetch
         return result
