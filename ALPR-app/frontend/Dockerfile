@@ -1,11 +1,25 @@
 # ==========================================
-# STAGE 1: Serve Pre-Built Static Files
+# STAGE 1: Build the React Application
 # ==========================================
-# The React/Vite app is built locally with `npm run build` (or `npx vite build`)
-# which outputs to the `dist/` folder. We simply copy that into nginx.
+FROM node:18-alpine AS build
+
+WORKDIR /app
+
+# Install dependencies
+COPY package.json package-lock.json* ./
+RUN npm install
+
+# Build the app
+COPY . .
+RUN npm run build
+
+# ==========================================
+# STAGE 2: Serve Pre-Built Static Files
+# ==========================================
 FROM nginx:alpine
 
-COPY dist /usr/share/nginx/html
+# Copy the built output from STAGE 1 into Nginx
+COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
