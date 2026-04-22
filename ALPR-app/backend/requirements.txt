@@ -11,4 +11,5 @@ nafnetlib
 ultralytics
 transformers
 torch
-peft       # Parameter Efficient Fine-Tuning — used to load LoRA adapter weights at inference
+peft              # Parameter Efficient Fine-Tuning — used to load LoRA adapter weights at inference
+prometheus-client # Exposes /metrics endpoint for Prometheus scraping
