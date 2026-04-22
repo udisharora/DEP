@@ -1,0 +1,11 @@
+data/
+data/needs_review/
+data/delta_batch/
+trocr_finetuned_final/
+trocr_finetuned_checkpoints/
+.git
+
+# Exclude local dev artifacts
+__pycache__/
+*.pyc
+.env

@@ -1,0 +1,81 @@
+name: ALPR CI/CD and MLOps Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  
+  # This serves as our generic Webhook to trigger the Continuous Training!
+  # Prometheus Alertmanager can hit this URL directly when confidence drops.
+  repository_dispatch:
+    types: [mlops_retrain_trigger]
+
+jobs:
+  # Phase 1: Continuous Integration (Linting & Testing)
+  test-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python Environment
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+          
+      - name: Install Linting Dependencies
+        run: |
+          cd ALPR-app/backend
+          python -m pip install --upgrade pip
+          pip install flake8 pytest
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          
+      - name: Lint Codebase with Flake8
+        run: |
+          cd ALPR-app/backend
+          # Halt the build if there are fatal Python syntax errors
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          
+      - name: Verify Docker Compose Build Stability
+        run: |
+          cd ALPR-app
+          docker compose build
+
+  # Phase 2: MLOps Continuous Training (CT)
+  # Extremely cool step: This job only runs if a webhook is fired due to Data Drift
+  continuous-training:
+    needs: test-and-lint
+    if: github.event.action == 'mlops_retrain_trigger'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup ML Python Environment
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+          
+      - name: Spin up TrOCR Retraining
+        run: |
+          cd ALPR-app/backend
+          pip install -r requirements.txt
+          
+          # In a real environment, you would inject a script here to fetch the newly-labelled data from S3/GCP
+          # For now, it simply runs the pipeline we built on the existing dataset.
+          python training/train_trocr.py
+          
+      # Since GitHub actions wipe environments instantly, you would push the new `./trocr_finetuned_final` directory
+      # natively back to GitHub, or upload it to Amazon S3 here.
+
+  # Phase 3: Continuous Deployment (CD)
+  deploy-to-production:
+    needs: [test-and-lint]
+    # Only deploy if it's pushed to main (pull requests shouldn't deploy!)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Rolling Deployment
+        run: |
+          echo "Simulating secure SSH deployment..."
+          # Mock Production Command:
+          # ssh user@production-server "cd /opt/alpr && git pull && docker compose up -d --build"

@@ -1,0 +1,77 @@
+services:
+  # 1. The Message Broker (In-Memory Queue)
+  redis:
+    image: redis:alpine
+    expose:
+      - "6379"
+    restart: always
+
+  # 2. The API Gateway (FastAPI)
+  backend:
+    build: ./backend
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - SHARED_UPLOADS_DIR=/app/shared_uploads
+      - HF_HOME=/app/.huggingface_cache
+    volumes:
+      - ./backend/data:/app/data                                    # Sync active learning data to Mac
+      - shared_uploads:/app/shared_uploads
+      - hf_cache:/app/.huggingface_cache
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+
+  # 3. The ML Execution Engine (Celery)
+  worker:
+    build: ./backend
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - SHARED_UPLOADS_DIR=/app/shared_uploads
+      - HF_HOME=/app/.huggingface_cache
+      - OMP_NUM_THREADS=1
+      - OPENBLAS_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
+    volumes:
+      - ./backend/data:/app/data
+      - shared_uploads:/app/shared_uploads
+      - hf_cache:/app/.huggingface_cache
+    command: celery -A tasks.celery_app worker --loglevel=info --concurrency=4 --max-tasks-per-child=5
+    depends_on:
+      - redis
+
+  # 4. The Presentation Layer (React + TS)
+  frontend:
+    build: ./frontend
+    expose:
+      - "80"
+
+  # 5. The Reverse Proxy (Nginx)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+
+  prometheus:
+    build:
+      context: .
+      dockerfile: Dockerfile.prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+# Define persistent storage locations
+volumes:
+  shared_uploads:
+  hf_cache:

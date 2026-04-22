@@ -1,0 +1,59 @@
+name: ALPR Continuous Training & Deployment (CI/CD)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # 1. CI Phase: Automatic Testing and Code Validation
+  continuous-integration:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Code Repository
+      uses: actions/checkout@v3
+      
+    - name: Set up Python 3.11 Environment
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+        
+    - name: Install Backend Requirements
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 pytest
+        pip install -r backend/requirements.txt
+        
+    - name: Lint Python Code with flake8
+      run: |
+        # Stop the build if there are syntax errors or undefined names
+        flake8 backend/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        
+    - name: CI Docker Sandbox Build Test
+      run: |
+        # Test if the environment correctly transpiles to Docker without caching
+        docker compose build backend frontend nginx
+
+  # 2. CD Phase: Continuous Deployment to Cloud
+  continuous-deployment:
+    needs: continuous-integration
+    runs-on: ubuntu-latest
+    # Only deploy on direct pushes/merges to the main production branch
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Build and Push Docker Images
+      run: |
+        echo "Simulating push to Amazon ECR or Docker Hub"
+        # docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+        # docker tag alpr-backend:latest myregistry/alpr-backend:latest
+        # docker push myregistry/alpr-backend:latest
+        
+    - name: Remote Server Rolling Update
+      run: |
+        echo "SSHing into production hardware (e.g. EC2) and invoking a container Hot-Swap"
+        # ssh -i key.pem user@host "cd /var/www/alpr && docker compose pull && docker compose up -d"
