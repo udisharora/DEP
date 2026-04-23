@@ -74,7 +74,7 @@ def trigger_retraining():
                 "--dataset",    delta_csv,
                 "--img_dir",    "data/delta_batch",
                 "--output",     LORA_ADAPTER_DIR,
-                "--epochs",     "3",      # 3 epochs is enough; overfitting starts fast
+                "--epochs",     "5",      # 3 epochs is enough; overfitting starts fast
                 "--lr",         "2e-5",   # Low LR to preserve base model knowledge
                 "--lora_r",     "4",      # Smaller rank = fewer params = less overfitting
                 "--lora_alpha", "8",      # Alpha ~ 2x rank
@@ -128,7 +128,7 @@ if __name__ == "__main__":
         queue_size = check_delta_batch_size()
         print(f"[{datetime.datetime.now().time()}] Current Delta Queue Size: {queue_size}/10 images")
 
-        if queue_size >= 200:
+        if queue_size >= 100:
             trigger_retraining()
             print("Sleeping for 10 minutes (cooldown) before monitoring again...")
             time.sleep(600)  # Cooldown period so we don't spam hardware on rapid drift
