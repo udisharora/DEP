@@ -74,7 +74,7 @@ def trigger_retraining():
                 "--dataset", delta_csv,
                 "--img_dir", "data/delta_batch",
                 "--output",  LORA_ADAPTER_DIR,
-                "--epochs",  "3",
+                "--epochs",  "40",
             ],
             cwd=backend_dir,
             check=True
