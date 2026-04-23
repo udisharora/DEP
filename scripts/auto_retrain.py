@@ -71,10 +71,13 @@ def trigger_retraining():
         subprocess.run(
             [
                 sys.executable, "training/train_trocr_lora.py",
-                "--dataset", delta_csv,
-                "--img_dir", "data/delta_batch",
-                "--output",  LORA_ADAPTER_DIR,
-                "--epochs",  "40",
+                "--dataset",    delta_csv,
+                "--img_dir",    "data/delta_batch",
+                "--output",     LORA_ADAPTER_DIR,
+                "--epochs",     "3",      # 3 epochs is enough; overfitting starts fast
+                "--lr",         "2e-5",   # Low LR to preserve base model knowledge
+                "--lora_r",     "4",      # Smaller rank = fewer params = less overfitting
+                "--lora_alpha", "8",      # Alpha ~ 2x rank
             ],
             cwd=backend_dir,
             check=True
@@ -119,13 +122,13 @@ if __name__ == "__main__":
     print("  MLOps LoRA Continuous Training Daemon        ")
     print("================================================")
     print("Monitoring Delta Batch Queue Directory...")
-    print("Data Drift Action Threshold: Queue > 10 Images")
+    print("Data Drift Action Threshold: Queue > 200 Images")
 
     while True:
         queue_size = check_delta_batch_size()
         print(f"[{datetime.datetime.now().time()}] Current Delta Queue Size: {queue_size}/10 images")
 
-        if queue_size >= 10:
+        if queue_size >= 200:
             trigger_retraining()
             print("Sleeping for 10 minutes (cooldown) before monitoring again...")
             time.sleep(600)  # Cooldown period so we don't spam hardware on rapid drift

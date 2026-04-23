@@ -28,7 +28,7 @@ import sys
 import torch
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
-from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+from transformers import TrOCRProcessor, VisionEncoderDecoderModel, get_cosine_schedule_with_warmup
 from peft import LoraConfig, get_peft_model, TaskType
 
 
@@ -40,10 +40,11 @@ parser.add_argument("--dataset",    required=True,            help="Path to delt
 parser.add_argument("--img_dir",    required=True,            help="Directory containing plate images")
 parser.add_argument("--output",     default="trocr_lora_adapters", help="Output dir for LoRA adapter weights")
 parser.add_argument("--epochs",     type=int,   default=3,    help="Number of training epochs")
-parser.add_argument("--lr",         type=float, default=5e-4, help="Learning rate")
+parser.add_argument("--lr",         type=float, default=2e-5, help="Learning rate (keep low for LoRA; 1e-5 to 5e-5 recommended)")
 parser.add_argument("--batch",      type=int,   default=4,    help="Batch size")
-parser.add_argument("--lora_r",     type=int,   default=16,   help="LoRA rank")
-parser.add_argument("--lora_alpha", type=int,   default=32,   help="LoRA alpha scaling factor")
+parser.add_argument("--lora_r",     type=int,   default=4,    help="LoRA rank (4 for small datasets, 8-16 for large)")
+parser.add_argument("--lora_alpha", type=int,   default=8,    help="LoRA alpha (~2x rank)")
+parser.add_argument("--warmup_ratio", type=float, default=0.1, help="Fraction of total steps used for LR warmup")
 args = parser.parse_args()
 
 
@@ -170,8 +171,21 @@ dataloader = DataLoader(dataset, batch_size=args.batch, shuffle=True, num_worker
 # ──────────────────────────────────────────────
 optimizer = torch.optim.AdamW(
     filter(lambda p: p.requires_grad, model.parameters()),
-    lr=args.lr
+    lr=args.lr,
+    weight_decay=0.01   # L2 regularization — penalises large adapter weights
 )
+
+# Cosine LR schedule with linear warmup:
+# - Warmup prevents large gradient steps at the start from corrupting base weights
+# - Cosine decay reduces the LR gently as training converges, avoiding late-epoch overfitting
+total_steps  = len(dataloader) * args.epochs
+warmup_steps = max(1, int(total_steps * args.warmup_ratio))
+scheduler = get_cosine_schedule_with_warmup(
+    optimizer,
+    num_warmup_steps=warmup_steps,
+    num_training_steps=total_steps
+)
+print(f"  Scheduler: cosine decay | total_steps={total_steps} | warmup_steps={warmup_steps}")
 
 print(f"\n[LoRA Trainer] Starting LoRA fine-tuning for {args.epochs} epoch(s)...")
 
@@ -210,7 +224,13 @@ for epoch in range(args.epochs):
 
         optimizer.zero_grad()
         loss.backward()
+        # Gradient clipping: prevents any single update from taking an extreme step
+        # and destroying the adapter weights (max gradient norm = 1.0 is standard)
+        torch.nn.utils.clip_grad_norm_(
+            filter(lambda p: p.requires_grad, model.parameters()), max_norm=1.0
+        )
         optimizer.step()
+        scheduler.step()   # Advance the cosine schedule after every batch
 
         total_loss += loss.item()
 
